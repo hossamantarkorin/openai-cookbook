@@ -1,0 +1,5 @@
+pandas>=2.0
+numpy>=1.25
+requests>=2.31
+python-dotenv>=1.0
+zoneinfo; python_version < "3.9"

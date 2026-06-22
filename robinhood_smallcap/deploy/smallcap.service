@@ -1,0 +1,22 @@
+# systemd service — alternative to Docker for native Linux deployment
+# Install: sudo cp smallcap.service /etc/systemd/system/
+#          sudo systemctl enable --now smallcap
+
+[Unit]
+Description=Robinhood SmallCap Trading Bot
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=ubuntu
+WorkingDirectory=/home/ubuntu/Robinhood_SmallCap
+EnvironmentFile=/home/ubuntu/Robinhood_SmallCap/.env
+ExecStart=/usr/bin/python3 smallcap/scheduler.py
+Restart=always
+RestartSec=30
+StandardOutput=append:/home/ubuntu/Robinhood_SmallCap/smallcap/logs/systemd.log
+StandardError=append:/home/ubuntu/Robinhood_SmallCap/smallcap/logs/systemd.log
+
+[Install]
+WantedBy=multi-user.target
