@@ -1,16 +1,15 @@
-version: "3.9"
-
 services:
   smallcap-bot:
     build:
       context: ..
       dockerfile: deploy/Dockerfile
     container_name: smallcap-bot
-    restart: always                  # auto-restart on crash or host reboot
+    restart: always                   # auto-restart on crash or host reboot
     env_file:
       - ../.env
     volumes:
-      - ../smallcap/logs:/app/smallcap/logs   # persist logs outside container
+      - ../smallcap/logs:/app/smallcap/logs           # persist trade logs
+      - ../smallcap/agent_config.json:/app/smallcap/agent_config.json:ro
     logging:
       driver: "json-file"
       options:
