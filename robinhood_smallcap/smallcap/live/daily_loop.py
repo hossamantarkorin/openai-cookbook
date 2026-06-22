@@ -5,7 +5,7 @@ Key improvements vs original:
   - Stop-loss placed ONLY after entry order confirms filled (no naked stops)
   - T1/T2 target exit orders placed after fill confirmation
   - Position monitor loop checks fills and manages scale-out every 60s
-  - PDT compliance: force-close skipped if no day trades remaining
+  - Cash account: no PDT rules; settlement guard prevents Good Faith Violations
   - Daily loss limit enforced ($100/day cap)
   - Buying power check respects 40% deployment cap ($400 max deployed)
   - Account number auto-discovered from agentic account
@@ -24,7 +24,7 @@ from broker.robinhood_mcp import RobinhoodMCP
 from signals.scanner import scan_watchlist
 from live.trade_log import log_trade, log_event, close_trade, update_trade, today_stats
 from live.notify import send_telegram
-from pdt_tracker import can_day_trade, record_day_trade, day_trades_remaining
+from settlement_guard import record_sale, log_settlement_status
 
 ET = ZoneInfo("America/New_York")
 
@@ -147,6 +147,11 @@ def _place_protective_orders(rh: RobinhoodMCP, signal: dict, filled_qty: int, fi
 
 
 def force_close_all(rh: RobinhoodMCP) -> None:
+    """
+    Close intraday (Signal C) positions before 3:45 PM.
+    Swing positions (Signals A/B) are held — force-close only touches same-day entries.
+    Cash account: no PDT concern; settlement is handled by Robinhood's buying_power.
+    """
     positions = _get_open_positions(rh)
     if not positions:
         logger.info("Force close: no open positions")
@@ -155,29 +160,24 @@ def force_close_all(rh: RobinhoodMCP) -> None:
     for pos in positions:
         symbol = pos["symbol"]
         qty = int(float(pos.get("quantity", 0)))
-        avg_cost = float(pos.get("average_buy_price", 0))
-        today_entry = pos.get("intraday_quantity", 0)
-        if float(today_entry) <= 0:
-            # Swing position entered before today — do NOT force close (avoid day trade)
-            logger.info(f"Force close skipping {symbol} — swing position, not entered today")
-            continue
+        intraday_qty = float(pos.get("intraday_quantity", 0))
 
-        if not can_day_trade():
-            logger.warning(f"PDT limit reached — cannot force-close {symbol} today, converting to swing")
-            send_telegram(f"PDT LIMIT: Cannot force-close {symbol}. Holding as swing.")
+        if intraday_qty <= 0:
+            logger.info(f"Force close skipping {symbol} — swing position held overnight")
             continue
 
         try:
             q = rh.get_equity_quotes([symbol])["data"]["results"][0]["quote"]
             price = float(q["last_trade_price"])
             limit = round(price * 0.998, 2)
-            rh.place_equity_order(symbol=symbol, side="sell", quantity=qty,
+            rh.place_equity_order(symbol=symbol, side="sell", quantity=int(intraday_qty),
                                   order_type="limit", limit_price=limit, time_in_force="day")
-            record_day_trade(symbol)
-            pnl = close_trade("", limit, qty, "force_close")
-            logger.info(f"Force close {symbol}: qty={qty} limit={limit} pnl≈${pnl:.2f}")
-            log_event("force_close", {"symbol": symbol, "qty": qty, "limit": limit})
-            send_telegram(f"Force close: {symbol} {qty}sh @ ${limit}")
+            proceeds = limit * intraday_qty
+            record_sale(symbol, proceeds)
+            pnl = close_trade("", limit, int(intraday_qty), "force_close")
+            logger.info(f"Force close {symbol}: qty={int(intraday_qty)} limit={limit} pnl≈${pnl:.2f}")
+            log_event("force_close", {"symbol": symbol, "qty": int(intraday_qty), "limit": limit})
+            send_telegram(f"Force close: {symbol} {int(intraday_qty)}sh @ ${limit}")
         except Exception as e:
             logger.error(f"Force close error {symbol}: {e}")
 
@@ -278,8 +278,9 @@ def main() -> None:
     bp = float(portfolio.get("buying_power", {}).get("buying_power", 0))
     total = float(portfolio.get("total_value", 0))
     logger.info(f"Account: equity=${total:.2f}, buying_power=${bp:.2f}")
-    logger.info(f"PDT day trades remaining: {day_trades_remaining()}")
-    send_telegram(f"Market open. Equity: ${total:.2f} | BP: ${bp:.2f} | PDT remaining: {day_trades_remaining()}")
+    settle_status = log_settlement_status()
+    logger.info(settle_status)
+    send_telegram(f"Market open. Equity: ${total:.2f} | BP: ${bp:.2f}\n{settle_status}")
 
     entered_today: set[str] = set()
     pending_fills: dict[str, dict] = {}
