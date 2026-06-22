@@ -1,18 +1,31 @@
 """
 One-time agent setup.
 
-Run this script once with ROBINHOOD_API_TOKEN in your .env.
-It stores the token in an Anthropic vault (write-only, never returned in API
-responses) and creates a persistent trading agent that references that vault.
+Creates an Anthropic cloud environment, a persistent trading agent, and
+(optionally) a vault for the Robinhood OAuth credential.
 
-After this script succeeds you can REMOVE ROBINHOOD_API_TOKEN from .env.
-Only ANTHROPIC_API_KEY is needed for daily operation.
+TWO MODES:
+─────────────────────────────────────────────────────────────────────────────
+Mode A — No vault (default, try first)
+  The Robinhood MCP server URL is declared on the agent. Anthropic may inject
+  the OAuth credentials automatically because your Anthropic account already
+  has a Robinhood connection via Claude Code's MCP integration. This is the
+  cleanest path: ANTHROPIC_API_KEY is the only credential needed everywhere.
 
-Usage:
-    python smallcap/setup/init_agent.py
+  python smallcap/setup/init_agent.py
 
-Outputs: smallcap/agent_config.json (keep this file — it holds the IDs needed
-         to run sessions, but no secrets).
+Mode B — With vault (fallback if Mode A sessions get auth errors)
+  Explicitly stores the Robinhood Bearer token in an Anthropic vault.
+  How to get the token when Mode A fails:
+    • Check Robinhood's website (not just app) for API/developer settings
+    • Contact Robinhood support for Agentic Trading programmatic access
+    • Inspect ~/.claude/ or Claude Code desktop credential store if you
+      use the desktop Claude Code app (Mac: ~/Library/Application Support/Claude/)
+
+  ROBINHOOD_API_TOKEN=<token> python smallcap/setup/init_agent.py --with-vault
+─────────────────────────────────────────────────────────────────────────────
+
+Outputs: smallcap/agent_config.json  (IDs only — no secrets in this file)
 """
 import json
 import os
@@ -214,20 +227,23 @@ def main() -> None:
         print("ERROR: anthropic package not found. Run: pip install anthropic")
         sys.exit(1)
 
-    token = os.getenv("ROBINHOOD_API_TOKEN", "")
-    if not token:
-        print("ERROR: ROBINHOOD_API_TOKEN must be set in .env for this one-time setup.")
-        print("After setup you can remove it — only ANTHROPIC_API_KEY will be needed.")
-        sys.exit(1)
+    use_vault = "--with-vault" in sys.argv
 
     api_key = os.getenv("ANTHROPIC_API_KEY", "")
     if not api_key:
         print("ERROR: ANTHROPIC_API_KEY not set.")
         sys.exit(1)
 
+    token = os.getenv("ROBINHOOD_API_TOKEN", "")
+    if use_vault and not token:
+        print("ERROR: --with-vault requires ROBINHOOD_API_TOKEN in .env")
+        print("See the module docstring for how to obtain the token.")
+        sys.exit(1)
+
     client = anthropic.Anthropic(api_key=api_key)
 
-    print("=== SmallCap Agent Setup ===\n")
+    print("=== SmallCap Agent Setup ===")
+    print(f"Mode: {'vault (explicit token)' if use_vault else 'no-vault (Anthropic-managed auth)'}\n")
 
     # ── 1. Create cloud environment ──────────────────────────────────────────
     print("1. Creating cloud environment (unrestricted networking)...")
@@ -237,22 +253,27 @@ def main() -> None:
     )
     print(f"   Environment: {env.id}")
 
-    # ── 2. Create vault + credential ─────────────────────────────────────────
-    print("2. Creating credentials vault...")
-    vault = client.beta.vaults.create(name="robinhood-trading-vault")
-    print(f"   Vault: {vault.id}")
+    # ── 2. Optionally create vault ────────────────────────────────────────────
+    vault_id = None
+    if use_vault:
+        print("2. Creating credentials vault...")
+        vault = client.beta.vaults.create(name="robinhood-trading-vault")
+        print(f"   Vault: {vault.id}")
 
-    print("   Storing Robinhood MCP credential (static bearer)...")
-    cred = client.beta.vaults.credentials.create(
-        vault_id=vault.id,
-        display_name="Robinhood Agentic Trading Token",
-        auth={
-            "type": "static_bearer",
-            "mcp_server_url": ROBINHOOD_MCP_URL,
-            "token": token,
-        },
-    )
-    print(f"   Credential: {cred.id}")
+        print("   Storing Robinhood MCP credential (static bearer)...")
+        cred = client.beta.vaults.credentials.create(
+            vault_id=vault.id,
+            display_name="Robinhood Agentic Trading Token",
+            auth={
+                "type": "static_bearer",
+                "mcp_server_url": ROBINHOOD_MCP_URL,
+                "token": token,
+            },
+        )
+        print(f"   Credential: {cred.id}")
+        vault_id = vault.id
+    else:
+        print("2. Skipping vault (relying on Anthropic-managed Robinhood OAuth)")
 
     # ── 3. Create the trading agent ───────────────────────────────────────────
     print("3. Creating SmallCap Trading Agent...")
@@ -277,18 +298,25 @@ def main() -> None:
     # ── 4. Save config ────────────────────────────────────────────────────────
     config = {
         "environment_id": env.id,
-        "vault_id": vault.id,
+        "vault_id": vault_id,        # None if no-vault mode
         "agent_id": agent.id,
         "agent_version": agent.version,
         "robinhood_mcp_url": ROBINHOOD_MCP_URL,
+        "auth_mode": "vault" if use_vault else "anthropic_managed",
     }
     CONFIG_FILE.write_text(json.dumps(config, indent=2))
     print(f"\n4. Config saved → {CONFIG_FILE}")
 
     print("\n=== Setup Complete ===")
-    print("✓ You can now REMOVE ROBINHOOD_API_TOKEN from .env")
+    if use_vault:
+        print("✓ You can now REMOVE ROBINHOOD_API_TOKEN from .env")
+    else:
+        print("✓ No Robinhood token needed — Anthropic manages the OAuth connection")
     print("✓ Only ANTHROPIC_API_KEY is needed for daily operation")
     print(f"✓ Config file: {CONFIG_FILE}")
+    if not use_vault:
+        print("\nNOTE: If sessions get Robinhood auth errors, re-run with --with-vault")
+        print("      once you obtain the token (see module docstring for paths).")
 
 
 if __name__ == "__main__":

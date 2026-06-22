@@ -52,12 +52,14 @@ class TradingSession:
     # ── Context manager ────────────────────────────────────────────────────────
 
     def __enter__(self):
-        self._session = self.client.beta.sessions.create(
+        kwargs = dict(
             agent=self.agent_id,
             environment_id=self.environment_id,
-            vault_ids=[self.vault_id],
             title=self.title,
         )
+        if self.vault_id:
+            kwargs["vault_ids"] = [self.vault_id]
+        self._session = self.client.beta.sessions.create(**kwargs)
         logger.info(f"Session started: {self._session.id}")
         return self
 

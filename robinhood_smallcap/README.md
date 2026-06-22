@@ -88,17 +88,23 @@ cp .env.example .env
 pip install -r requirements.txt
 ```
 
-### Step 2 — One-time agent setup (run once, then remove the Robinhood token)
+### Step 2 — One-time agent setup
 
 ```bash
+# Default: no Robinhood token needed.
+# Anthropic injects the Robinhood OAuth credentials automatically because
+# your Claude Code account already has Robinhood connected.
 python smallcap/setup/init_agent.py
-# This creates an Anthropic vault + trading agent, writes smallcap/agent_config.json
-# After success: remove ROBINHOOD_API_TOKEN from .env  ← important
 ```
 
-> **Why this works:** `init_agent.py` stores your Robinhood OAuth token in an
-> Anthropic-managed vault. The token never appears in `.env` again and is
-> auto-refreshed by Anthropic. Your Ubuntu server only needs `ANTHROPIC_API_KEY`.
+> **Why no token is needed:** The Robinhood Agentic Trading OAuth credential lives
+> inside Anthropic's infrastructure (created when you connected Robinhood to
+> Claude Code). It is NOT in the Robinhood app settings. Managed Agent sessions
+> running on Anthropic's cloud can use this credential automatically.
+
+> **If sessions report auth errors** (Robinhood rejects the connection), re-run
+> with the vault mode: `python smallcap/setup/init_agent.py --with-vault`
+> (requires a Robinhood developer token — contact Robinhood support if needed).
 
 ### Step 3 — Verify connection
 
